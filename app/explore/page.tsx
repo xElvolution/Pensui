@@ -50,11 +50,8 @@ export default function ExplorePage() {
         "0x0000000000000000000000000000000000000000000000000000000000000000";
 
     if (!isContractDeployed) {
-      // small delay to make the skeleton visible
-      setTimeout(() => {
-        setArticles(getDemoArticles());
-        setLoading(false);
-      }, 400);
+      setArticles([]);
+      setLoading(false);
       return;
     }
 
@@ -65,41 +62,45 @@ export default function ExplorePage() {
         order: "descending",
       });
 
-      const fetched: ArticleCardProps[] = [];
-
+      // Collect all content IDs from the event stream, then batch-fetch their
+      // current state in a SINGLE multiGetObjects RPC call. Sequential
+      // getObject calls were rate-limiting on Tatum, dropping ~half the
+      // articles silently.
+      const ids: string[] = [];
       for (const event of result.data) {
-        const parsed = event.parsedJson as Record<string, string>;
-        if (!parsed) continue;
+        const parsed = event.parsedJson as Record<string, string> | null;
+        if (parsed?.content_id) ids.push(parsed.content_id);
+      }
 
-        try {
-          const objResult = await suiClient.getObject({
-            id: parsed.content_id,
-            options: { showContent: true },
+      const fetched: ArticleCardProps[] = [];
+      if (ids.length > 0) {
+        const objs = await suiClient.multiGetObjects({
+          ids,
+          options: { showContent: true },
+        });
+        for (const obj of objs) {
+          if (obj.data?.content?.dataType !== "moveObject") continue;
+          const fields = obj.data.content.fields as Record<string, unknown>;
+          fetched.push({
+            id: obj.data.objectId,
+            title: (fields.title as string) || "Untitled",
+            description: (fields.description as string) || "",
+            creator: (fields.creator as string) || "",
+            createdAt: Number(fields.created_at) || Date.now(),
+            mintPrice: Number(fields.mint_price) || 0,
+            readPrice: Number(fields.read_price) || 0,
+            totalMints: Number(fields.total_mints) || 0,
+            subscriptionRequired:
+              (fields.subscription_required as boolean) || false,
+            blobId: (fields.blob_id as string) || "",
           });
-
-          if (objResult.data?.content?.dataType === "moveObject") {
-            const fields = objResult.data.content.fields as Record<string, unknown>;
-            fetched.push({
-              id: parsed.content_id,
-              title: (fields.title as string) || "Untitled",
-              description: (fields.description as string) || "",
-              creator: (fields.creator as string) || "",
-              createdAt: Number(fields.created_at) || Date.now(),
-              mintPrice: Number(fields.mint_price) || 0,
-              readPrice: Number(fields.read_price) || 0,
-              totalMints: Number(fields.total_mints) || 0,
-              subscriptionRequired: (fields.subscription_required as boolean) || false,
-              blobId: (fields.blob_id as string) || "",
-            });
-          }
-        } catch {
-          // skip
         }
       }
 
-      setArticles(fetched.length > 0 ? fetched : getDemoArticles());
-    } catch {
-      setArticles(getDemoArticles());
+      setArticles(fetched);
+    } catch (err) {
+      console.error("[explore] queryEvents failed:", err);
+      setArticles([]);
     } finally {
       setLoading(false);
     }
@@ -246,87 +247,4 @@ export default function ExplorePage() {
       </div>
     </div>
   );
-}
-
-function getDemoArticles(): ArticleCardProps[] {
-  return [
-    {
-      id: "demo-1",
-      title: "Getting started with decentralized publishing",
-      description:
-        "How PENSUI empowers creators with permanent, censorship-resistant publishing on Sui. A primer for writers, developers, and protocol designers.",
-      creator: "0x1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b",
-      createdAt: Date.now() - 3600000,
-      mintPrice: 1000000000,
-      readPrice: 0,
-      totalMints: 12,
-      subscriptionRequired: false,
-      blobId: "demo-blob-1",
-    },
-    {
-      id: "demo-2",
-      title: "The future of content ownership in Web3",
-      description:
-        "Why storing content on Walrus changes everything for digital creators and their audiences. Plus, why platform risk is finally optional.",
-      creator: "0x2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c",
-      createdAt: Date.now() - 7200000,
-      mintPrice: 0,
-      readPrice: 500000000,
-      totalMints: 0,
-      subscriptionRequired: false,
-      blobId: "demo-blob-2",
-    },
-    {
-      id: "demo-3",
-      title: "Sui Move: building the publishing protocol",
-      description:
-        "A technical deep dive into how PENSUI smart contracts handle monetization, ownership, and fee distribution at scale.",
-      creator: "0x3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d",
-      createdAt: Date.now() - 10800000,
-      mintPrice: 2000000000,
-      readPrice: 0,
-      totalMints: 8,
-      subscriptionRequired: false,
-      blobId: "demo-blob-3",
-    },
-    {
-      id: "demo-4",
-      title: "Why Walrus storage is perfect for media",
-      description:
-        "Comparing decentralized storage solutions and why Walrus wins for permanent, performant content delivery.",
-      creator: "0x4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e",
-      createdAt: Date.now() - 18000000,
-      mintPrice: 0,
-      readPrice: 0,
-      totalMints: 0,
-      subscriptionRequired: true,
-      blobId: "demo-blob-4",
-    },
-    {
-      id: "demo-5",
-      title: "Monetizing your writing with NFT mints",
-      description:
-        "How the mint-to-collect model creates a new revenue stream for independent writers — without ads, without platform cuts.",
-      creator: "0x1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b",
-      createdAt: Date.now() - 36000000,
-      mintPrice: 500000000,
-      readPrice: 0,
-      totalMints: 23,
-      subscriptionRequired: false,
-      blobId: "demo-blob-5",
-    },
-    {
-      id: "demo-6",
-      title: "The economics of decentralized content",
-      description:
-        "Analyzing how removing platform middlemen changes the unit economics for creators and readers — and why it matters now.",
-      creator: "0x5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f",
-      createdAt: Date.now() - 86400000,
-      mintPrice: 1000000000,
-      readPrice: 250000000,
-      totalMints: 5,
-      subscriptionRequired: false,
-      blobId: "demo-blob-6",
-    },
-  ];
 }

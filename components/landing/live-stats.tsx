@@ -14,7 +14,7 @@ const stats: Stat[] = [
   { value: 1247, label: "Articles published" },
   { value: 312, label: "Creators" },
   { value: 8429, label: "NFTs minted" },
-  { value: 1857, label: "SUI earned", suffix: " SUI" },
+  { value: 165, label: "SUI earned", suffix: " SUI" },
 ];
 
 export function LiveStats() {
@@ -40,12 +40,7 @@ export function LiveStats() {
           duration: 1.6,
           ease: "power2.out",
           onUpdate: () => {
-            setCounts([
-              Math.floor(proxy[0]),
-              Math.floor(proxy[1]),
-              Math.floor(proxy[2]),
-              Math.floor(proxy[3]),
-            ]);
+            setCounts([proxy[0], proxy[1], proxy[2], proxy[3]]);
           },
         });
         window.removeEventListener("scroll", maybeStart);
@@ -67,7 +62,9 @@ export function LiveStats() {
           {stats.map((stat, i) => (
             <div key={stat.label}>
               <div className="text-[clamp(2rem,4vw,3rem)] font-bold tracking-tight mb-3 mono">
-                {formatNumber(counts[i])}
+                {stat.suffix
+                  ? counts[i].toFixed(1)
+                  : formatNumber(Math.floor(counts[i]))}
                 {stat.suffix && (
                   <span className="text-[color:var(--fg-muted)]">{stat.suffix}</span>
                 )}

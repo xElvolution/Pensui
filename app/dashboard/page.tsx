@@ -8,6 +8,7 @@ import { timeAgo, formatNumber } from "@/lib/utils";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
+import { ConnectHero } from "@/components/wallet/connect-hero";
 import { StatCardSkeleton, RowSkeleton } from "@/components/ui/skeleton";
 import { Mono } from "@/components/ui/mono";
 import {
@@ -16,7 +17,6 @@ import {
   Users,
   Sparkles,
   PenLine,
-  Wallet,
   TrendingUp,
 } from "lucide-react";
 
@@ -55,38 +55,56 @@ export default function DashboardPage() {
         "0x0000000000000000000000000000000000000000000000000000000000000000";
 
     if (!deployed) {
-      setTimeout(() => {
-        setStats(demoStats());
-        setLoading(false);
-      }, 400);
+      setStats({
+        totalEarnings: 0,
+        totalPosts: 0,
+        totalMints: 0,
+        totalSubscribers: 0,
+        articles: [],
+      });
+      setLoading(false);
       return;
     }
 
     try {
-      const owned = await suiClient.getOwnedObjects({
-        owner: account!.address,
-        filter: { StructType: `${PACKAGE_ID}::content::Content` },
-        options: { showContent: true },
+      // Content objects are shared, so we discover the creator's posts via
+      // ContentPublished events, then read current state from each object.
+      const events = await suiClient.queryEvents({
+        query: { MoveEventType: `${PACKAGE_ID}::content::ContentPublished` },
+        limit: 200,
+        order: "descending",
       });
+
+      const myContentIds = events.data
+        .map((e) => e.parsedJson as Record<string, string> | null)
+        .filter((p): p is Record<string, string> => !!p && p.creator === account!.address)
+        .map((p) => p.content_id);
 
       let totalEarnings = 0;
       let totalMints = 0;
       const articles: CreatorStats["articles"] = [];
 
-      for (const obj of owned.data) {
-        if (obj.data?.content?.dataType === "moveObject") {
-          const fields = obj.data.content.fields as Record<string, unknown>;
-          const e = Number(fields.total_earnings) || 0;
-          const m = Number(fields.total_mints) || 0;
-          totalEarnings += e;
-          totalMints += m;
-          articles.push({
-            id: obj.data.objectId,
-            title: (fields.title as string) || "Untitled",
-            mints: m,
-            earnings: e,
-            createdAt: Number(fields.created_at) || Date.now(),
-          });
+      if (myContentIds.length > 0) {
+        const objs = await suiClient.multiGetObjects({
+          ids: myContentIds,
+          options: { showContent: true },
+        });
+
+        for (const obj of objs) {
+          if (obj.data?.content?.dataType === "moveObject") {
+            const fields = obj.data.content.fields as Record<string, unknown>;
+            const e = Number(fields.total_earnings) || 0;
+            const m = Number(fields.total_mints) || 0;
+            totalEarnings += e;
+            totalMints += m;
+            articles.push({
+              id: obj.data.objectId,
+              title: (fields.title as string) || "Untitled",
+              mints: m,
+              earnings: e,
+              createdAt: Number(fields.created_at) || Date.now(),
+            });
+          }
         }
       }
 
@@ -110,22 +128,20 @@ export default function DashboardPage() {
         });
       }
     } catch {
-      setStats(demoStats());
+      setStats({
+        totalEarnings: 0,
+        totalPosts: 0,
+        totalMints: 0,
+        totalSubscribers: 0,
+        articles: [],
+      });
     } finally {
       setLoading(false);
     }
   }
 
   if (!account) {
-    return (
-      <div className="pt-32 pb-24 container-page">
-        <EmptyState
-          icon={<Wallet className="w-7 h-7" strokeWidth={1.5} />}
-          title="Connect your wallet"
-          description="View your creator analytics, earnings, and content."
-        />
-      </div>
-    );
+    return <ConnectHero />;
   }
 
   return (
@@ -144,11 +160,18 @@ export default function DashboardPage() {
               <h1 className="text-h2 mb-2">Welcome back.</h1>
               <Mono value={account.address} truncate={6} copyable className="text-[13px]" />
             </div>
-            <Link href="/write">
-              <Button leftIcon={<PenLine className="w-4 h-4" />}>
-                New article
-              </Button>
-            </Link>
+            <div className="flex items-center gap-2">
+              <Link href="/settings">
+                <Button variant="ghost">
+                  Settings
+                </Button>
+              </Link>
+              <Link href="/write">
+                <Button leftIcon={<PenLine className="w-4 h-4" />}>
+                  New article
+                </Button>
+              </Link>
+            </div>
           </div>
 
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-12">
@@ -299,18 +322,4 @@ function StatCard({
       </p>
     </div>
   );
-}
-
-function demoStats(): CreatorStats {
-  return {
-    totalEarnings: 15500000000,
-    totalPosts: 5,
-    totalMints: 23,
-    totalSubscribers: 8,
-    articles: [
-      { id: "demo-1", title: "Getting started with PENSUI", mints: 12, earnings: 12000000000, createdAt: Date.now() - 86400000 },
-      { id: "demo-2", title: "Web3 content revolution", mints: 8, earnings: 2500000000, createdAt: Date.now() - 172800000 },
-      { id: "demo-3", title: "Why Walrus changes everything", mints: 3, earnings: 1000000000, createdAt: Date.now() - 259200000 },
-    ],
-  };
 }

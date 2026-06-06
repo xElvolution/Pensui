@@ -2,8 +2,18 @@ export const PACKAGE_ID = process.env.NEXT_PUBLIC_PACKAGE_ID!;
 export const PLATFORM_ID = process.env.NEXT_PUBLIC_PLATFORM_ID!;
 export const SUI_NETWORK = (process.env.NEXT_PUBLIC_SUI_NETWORK || "testnet") as "testnet" | "mainnet" | "devnet";
 export const TATUM_RPC = process.env.NEXT_PUBLIC_TATUM_RPC!;
+export const TATUM_API_KEY = process.env.NEXT_PUBLIC_TATUM_API_KEY!;
 export const WALRUS_AGGREGATOR = process.env.NEXT_PUBLIC_WALRUS_AGGREGATOR!;
 export const WALRUS_PUBLISHER = process.env.WALRUS_PUBLISHER || "https://publisher.walrus-testnet.walrus.space";
+
+// --- PENSUI Pro (AI features paid via on-chain subscription) ---
+export const PRO_RECIPIENT = process.env.NEXT_PUBLIC_PRO_RECIPIENT!;
+export const PRO_PRICE_SUI = Number(process.env.NEXT_PUBLIC_PRO_PRICE_SUI || "2");
+export const PRO_DURATION_DAYS = Number(
+  process.env.NEXT_PUBLIC_PRO_DURATION_DAYS || "30"
+);
+export const AI_DAILY_FREE_LIMIT = 30;
+export const AI_DAILY_PRO_LIMIT = 300;
 
 export const CLOCK_ID = "0x0000000000000000000000000000000000000000000000000000000000000006";
 

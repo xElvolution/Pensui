@@ -6,6 +6,7 @@ import { ConnectButton } from "@mysten/dapp-kit";
 import { Menu, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
+import { FaucetMenu } from "./faucet-menu";
 
 const navLinks = [
   { href: "/explore", label: "Explore" },
@@ -74,6 +75,23 @@ export function Navbar() {
           </nav>
 
           <div className="flex items-center gap-2">
+            <Link
+              href="/pro"
+              className="hidden sm:inline-flex items-center gap-1.5 h-9 px-3 rounded-md text-[13px] font-semibold tracking-tight transition-all"
+              style={{
+                background:
+                  "linear-gradient(135deg, var(--accent), var(--accent-hover))",
+                color: "#fff",
+                boxShadow:
+                  "0 0 0 1px var(--accent-border), 0 8px 22px -8px rgba(124,58,237,0.45)",
+              }}
+            >
+              <span className="mono text-[10.5px]">✦</span>
+              Pro
+            </Link>
+            <div className="hidden sm:block">
+              <FaucetMenu />
+            </div>
             <div className="connect-button-wrap hidden sm:block">
               <ConnectButton />
             </div>
@@ -108,8 +126,11 @@ export function Navbar() {
                 </Link>
               );
             })}
-            <div className="connect-button-wrap pt-3 sm:hidden">
-              <ConnectButton />
+            <div className="pt-3 sm:hidden flex flex-col gap-2">
+              <FaucetMenu />
+              <div className="connect-button-wrap">
+                <ConnectButton />
+              </div>
             </div>
           </div>
         </div>
@@ -120,23 +141,13 @@ export function Navbar() {
 
 function Logo() {
   return (
-    <svg
-      width="22"
-      height="22"
-      viewBox="0 0 24 24"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-      className="text-[color:var(--accent-hover)]"
-    >
-      <path
-        d="M4 20L18.4 5.6a2.83 2.83 0 0 1 4 4L8 24l-6 2 2-6z"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        fill="none"
-      />
-      <circle cx="20" cy="20" r="2" fill="currentColor" />
-    </svg>
+    /* eslint-disable-next-line @next/next/no-img-element */
+    <img
+      src="/logo.png"
+      alt="PENSUI"
+      width={26}
+      height={26}
+      className="block"
+    />
   );
 }

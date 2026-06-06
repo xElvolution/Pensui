@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { NetworkStatus } from "./network-status";
 
 export function Footer() {
   return (
@@ -61,9 +62,36 @@ export function Footer() {
               Built On
             </h4>
             <ul className="space-y-3 text-[14px] text-[color:var(--fg-secondary)]">
-              <li>Sui Blockchain</li>
-              <li>Walrus Storage</li>
-              <li>Tatum RPC</li>
+              <li>
+                <a
+                  href="https://sui.io"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="hover:text-[color:var(--fg)] transition-colors"
+                >
+                  Sui Blockchain
+                </a>
+              </li>
+              <li>
+                <a
+                  href="https://www.walrus.xyz/"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="hover:text-[color:var(--fg)] transition-colors"
+                >
+                  Walrus Storage
+                </a>
+              </li>
+              <li>
+                <a
+                  href="https://tatum.io/chain/sui"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="hover:text-[color:var(--fg)] transition-colors"
+                >
+                  Tatum RPC
+                </a>
+              </li>
             </ul>
           </div>
         </div>
@@ -72,10 +100,7 @@ export function Footer() {
           <p className="text-[12px] mono text-[color:var(--fg-muted)]">
             &copy; {new Date().getFullYear()} PENSUI Protocol
           </p>
-          <div className="inline-flex items-center gap-2 px-3 h-8 rounded-full bg-[color:var(--surface)] border border-[color:var(--border)]">
-            <span className="w-1.5 h-1.5 rounded-full bg-[color:var(--success)] pulse-dot" />
-            <span className="text-[12px] mono text-[color:var(--fg-secondary)]">sui testnet</span>
-          </div>
+          <NetworkStatus />
         </div>
       </div>
     </footer>

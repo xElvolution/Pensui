@@ -1,14 +1,30 @@
 "use client";
 
-import { useState, useEffect, use, type ReactNode } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import {
+  useState,
+  useEffect,
+  use,
+  useRef,
+  type ReactNode,
+} from "react";
+import {
+  motion,
+  AnimatePresence,
+  useScroll,
+  useTransform,
+} from "framer-motion";
 import {
   useCurrentAccount,
   useSuiClient,
-  useSignAndExecuteTransaction,
+  useSignTransaction,
 } from "@mysten/dapp-kit";
 import { readFromWalrus } from "@/lib/walrus";
-import { buildMintCollectTx, buildTipTx, buildPayToReadTx } from "@/lib/contracts";
+import {
+  buildMintCollectTx,
+  buildTipTx,
+  buildPayToReadTx,
+  buildSubscribeTx,
+} from "@/lib/contracts";
 import {
   PACKAGE_ID,
   formatSui,
@@ -66,7 +82,7 @@ export default function ArticlePage({
   const { id } = use(params);
   const account = useCurrentAccount();
   const suiClient = useSuiClient();
-  const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
+  const { mutateAsync: signTransaction } = useSignTransaction();
 
   const [fields, setFields] = useState<ContentFields | null>(null);
   const [articleData, setArticleData] = useState<ArticleData | null>(null);
@@ -79,42 +95,130 @@ export default function ArticlePage({
   const [showTipModal, setShowTipModal] = useState(false);
   const [copied, setCopied] = useState(false);
 
+  /**
+   * Sign the tx with the wallet, submit through our server-side Tatum proxy.
+   * Same pattern as profile-settings: avoids the wallet's internal RPC and
+   * any browser CORS quirks. Throws on failure so callers can catch.
+   */
+  async function signAndSubmit(tx: import("@mysten/sui/transactions").Transaction) {
+    const { bytes, signature } = await signTransaction({
+      transaction: tx,
+      chain: "sui:testnet",
+    });
+    const res = await fetch("/api/submit-tx", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ bytes, signature }),
+    });
+    if (!res.ok) {
+      const errBody = await res
+        .json()
+        .catch(() => ({ error: `HTTP ${res.status}` }));
+      throw new Error(errBody.error || "Sui submission failed");
+    }
+  }
+
+
   useEffect(() => {
     loadContent();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  }, [id, account?.address]);
 
   async function loadContent() {
     setLoading(true);
     try {
-      if (id.startsWith("demo-")) {
-        const demos = getDemoArticles();
-        const demo = demos[id] || demos["demo-1"];
-        setFields(demo.fields);
-        setArticleData(demo.data);
-        setUnlocked(true);
-        setLoading(false);
-        return;
-      }
-
       const obj = await suiClient.getObject({
         id,
         options: { showContent: true },
       });
 
-      if (obj.data?.content?.dataType === "moveObject") {
-        const f = obj.data.content.fields as unknown as ContentFields;
-        setFields(f);
-        const isFree = Number(f.read_price) === 0 && !f.subscription_required;
-        if (isFree) {
+      if (obj.data?.content?.dataType !== "moveObject") return;
+
+      const f = obj.data.content.fields as unknown as ContentFields;
+      setFields(f);
+
+      // Load the Walrus blob eagerly so the paywall can show a real preview.
+      // Gating is enforced by what we RENDER, not by whether we have the bytes.
+      await loadArticleFromWalrus(f.blob_id);
+
+      const isFree = Number(f.read_price) === 0 && !f.subscription_required;
+      if (isFree) {
+        setUnlocked(true);
+        return;
+      }
+
+      // Gate check: does the current wallet already have access?
+      if (!account) return; // not connected → show paywall preview
+
+      if (f.subscription_required) {
+        const hasActive = await hasActiveSubscription(
+          account.address,
+          f.creator
+        );
+        if (hasActive) {
           setUnlocked(true);
-          await loadArticleFromWalrus(f.blob_id);
+          return;
+        }
+      }
+
+      if (Number(f.read_price) > 0) {
+        const paid = await hasPaidToRead(account.address, id);
+        if (paid) {
+          setUnlocked(true);
+          return;
         }
       }
     } catch (err) {
       console.error("Failed to load content:", err);
     } finally {
       setLoading(false);
+    }
+  }
+
+  /** True if the wallet owns an unexpired Subscription for this creator. */
+  async function hasActiveSubscription(
+    walletAddress: string,
+    creatorAddress: string
+  ): Promise<boolean> {
+    try {
+      const owned = await suiClient.getOwnedObjects({
+        owner: walletAddress,
+        filter: {
+          StructType: `${PACKAGE_ID}::subscription::Subscription`,
+        },
+        options: { showContent: true },
+      });
+      const now = Date.now();
+      return owned.data.some((o) => {
+        if (o.data?.content?.dataType !== "moveObject") return false;
+        const sf = o.data.content.fields as Record<string, unknown>;
+        return (
+          sf.creator === creatorAddress &&
+          Number(sf.expires_at) > now
+        );
+      });
+    } catch {
+      return false;
+    }
+  }
+
+  /** True if a ContentRead event exists with this wallet as reader. */
+  async function hasPaidToRead(
+    walletAddress: string,
+    contentId: string
+  ): Promise<boolean> {
+    try {
+      const reads = await suiClient.queryEvents({
+        query: { MoveEventType: `${PACKAGE_ID}::content::ContentRead` },
+        limit: 200,
+        order: "descending",
+      });
+      return reads.data.some((e) => {
+        const p = e.parsedJson as Record<string, string> | null;
+        return p?.content_id === contentId && p?.reader === walletAddress;
+      });
+    } catch {
+      return false;
     }
   }
 
@@ -138,7 +242,7 @@ export default function ArticlePage({
         contentId: id,
         mintPrice: mistToSui(Number(fields.mint_price)),
       });
-      await signAndExecute({ transaction: tx });
+      await signAndSubmit(tx);
       setMintStatus("success");
       setTimeout(() => setMintStatus("idle"), 3000);
     } catch {
@@ -154,7 +258,7 @@ export default function ArticlePage({
         contentId: id,
         amount: parseFloat(tipAmount) || 0.5,
       });
-      await signAndExecute({ transaction: tx });
+      await signAndSubmit(tx);
       setTipStatus("success");
       setTimeout(() => {
         setShowTipModal(false);
@@ -172,11 +276,27 @@ export default function ArticlePage({
         contentId: id,
         readPrice: mistToSui(Number(fields.read_price)),
       });
-      await signAndExecute({ transaction: tx });
+      await signAndSubmit(tx);
       setUnlocked(true);
       await loadArticleFromWalrus(fields.blob_id);
     } catch (err) {
       console.error("Pay to read failed:", err);
+    }
+  }
+
+  async function handleSubscribeToRead() {
+    if (!fields) return;
+    try {
+      const tx = buildSubscribeTx({
+        creatorAddress: fields.creator,
+        amount: 1,
+        durationDays: 30,
+      });
+      await signAndSubmit(tx);
+      setUnlocked(true);
+      await loadArticleFromWalrus(fields.blob_id);
+    } catch (err) {
+      console.error("Subscribe failed:", err);
     }
   }
 
@@ -282,7 +402,7 @@ export default function ArticlePage({
               <Sparkles className="w-3 h-3" />
               {fields.total_mints} mints
             </span>
-            {fields.blob_id && !fields.blob_id.startsWith("demo") && (
+            {fields.blob_id && (
               <a
                 href={getWalrusUrl(fields.blob_id)}
                 target="_blank"
@@ -314,31 +434,14 @@ export default function ArticlePage({
               <p className="text-[color:var(--fg-muted)]">Failed to load content.</p>
             )
           ) : (
-            <div className="relative">
-              <div className="prose opacity-30 pointer-events-none select-none">
-                <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua…</p>
-                <p>Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.</p>
-              </div>
-
-              <div className="absolute inset-x-0 bottom-0 top-1/3 bg-gradient-to-b from-transparent via-[color:var(--bg)] to-[color:var(--bg)]" />
-
-              <div className="relative -mt-32 card max-w-md mx-auto text-center">
-                <div className="w-12 h-12 mx-auto mb-5 rounded-full bg-[color:var(--accent-soft)] border border-[color:var(--accent-border)] flex items-center justify-center">
-                  <Lock className="w-5 h-5 text-[color:var(--accent-hover)]" strokeWidth={1.75} />
-                </div>
-                <h3 className="text-[18px] font-semibold mb-2">Premium content</h3>
-                <p className="text-[14px] text-[color:var(--fg-muted)] mb-6">
-                  {Number(fields.read_price) > 0
-                    ? `Unlock this article for ${formatSui(Number(fields.read_price))}. Yours forever, on-chain.`
-                    : "Subscribe to this creator to access this content."}
-                </p>
-                {Number(fields.read_price) > 0 && (
-                  <Button onClick={handlePayToRead} className="w-full">
-                    Pay {formatSui(Number(fields.read_price))} to read
-                  </Button>
-                )}
-              </div>
-            </div>
+            <PreviewPaywall
+              articleData={articleData}
+              contentLoading={contentLoading}
+              fields={fields}
+              account={!!account}
+              onPay={handlePayToRead}
+              onSubscribe={handleSubscribeToRead}
+            />
           )}
 
           <div className="flex flex-wrap items-center gap-3 mt-12 pt-8 border-t border-[color:var(--border)]">
@@ -464,6 +567,317 @@ export default function ArticlePage({
   );
 }
 
+function PreviewPaywall({
+  articleData,
+  contentLoading,
+  fields,
+  account,
+  onPay,
+  onSubscribe,
+}: {
+  articleData: ArticleData | null;
+  contentLoading: boolean;
+  fields: ContentFields;
+  account: boolean;
+  onPay: () => void;
+  onSubscribe: () => void;
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const { scrollYProgress } = useScroll({
+    target: scrollRef,
+    offset: ["start end", "end end"],
+  });
+
+  // 0%–35% of the section in view: no blur
+  // 35%–100%: ramps to 8px blur
+  const blurPx = useTransform(scrollYProgress, [0.35, 1], [0, 8]);
+  const filter = useTransform(blurPx, (v) => `blur(${v}px)`);
+  const opacity = useTransform(scrollYProgress, [0.55, 1], [1, 0.35]);
+  const ctaOpacity = useTransform(scrollYProgress, [0.7, 1], [0, 1]);
+  const ctaY = useTransform(scrollYProgress, [0.7, 1], [12, 0]);
+
+  const [showCard, setShowCard] = useState(false);
+
+  if (contentLoading) {
+    return (
+      <div className="space-y-3 py-8">
+        <Skeleton className="h-4 w-full" />
+        <Skeleton className="h-4 w-11/12" />
+        <Skeleton className="h-4 w-full" />
+        <Skeleton className="h-4 w-5/6" />
+        <p className="text-[12px] mono text-[color:var(--fg-muted)] mt-6">
+          Loading from Walrus…
+        </p>
+      </div>
+    );
+  }
+
+  if (!articleData) {
+    return (
+      <p className="text-[color:var(--fg-muted)]">Preview unavailable.</p>
+    );
+  }
+
+  return (
+    <>
+      <div ref={scrollRef} className="relative">
+        <motion.div
+          className="prose pointer-events-none select-none will-change-[filter,opacity]"
+          style={{ filter, opacity }}
+        >
+          {renderContent(articleData.content)}
+        </motion.div>
+
+        <motion.div
+          className="flex flex-col items-center gap-3 mt-12 pt-6 border-t border-[color:var(--border)]"
+          style={{ opacity: ctaOpacity, y: ctaY }}
+        >
+          <p className="text-[12px] mono uppercase tracking-[0.18em] text-[color:var(--fg-muted)]">
+            keep reading
+          </p>
+          <button
+            type="button"
+            onClick={() => setShowCard(true)}
+            className="group inline-flex items-center gap-2 h-12 px-7 rounded-full bg-[color:var(--accent)] text-white font-semibold text-[14.5px] tracking-tight transition-all duration-200 hover:bg-[color:var(--accent-hover)] hover:-translate-y-0.5"
+            style={{
+              boxShadow:
+                "0 0 0 1px var(--accent-border), 0 22px 50px -16px rgba(124,58,237,0.45), 0 6px 18px -6px rgba(124,58,237,0.35)",
+            }}
+          >
+            Continue reading
+            <Lock className="w-3.5 h-3.5 opacity-90" strokeWidth={2} />
+          </button>
+        </motion.div>
+      </div>
+
+      <PaywallModal
+        open={showCard}
+        onClose={() => setShowCard(false)}
+        fields={fields}
+        account={account}
+        onPay={() => {
+          setShowCard(false);
+          onPay();
+        }}
+        onSubscribe={() => {
+          setShowCard(false);
+          onSubscribe();
+        }}
+      />
+    </>
+  );
+}
+
+function PaywallModal({
+  open,
+  onClose,
+  fields,
+  account,
+  onPay,
+  onSubscribe,
+}: {
+  open: boolean;
+  onClose: () => void;
+  fields: ContentFields;
+  account: boolean;
+  onPay: () => void;
+  onSubscribe: () => void;
+}) {
+  const hasPay = Number(fields.read_price) > 0;
+  const hasSub = fields.subscription_required;
+
+  return (
+    <AnimatePresence>
+      {open && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.18 }}
+          className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/75 backdrop-blur-md"
+          onClick={onClose}
+        >
+          <motion.div
+            initial={{ opacity: 0, y: 12, scale: 0.97 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 12, scale: 0.97 }}
+            transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+            onClick={(e) => e.stopPropagation()}
+            className="relative w-full max-w-lg rounded-2xl border border-[color:var(--border-strong)] bg-[color:var(--card)] overflow-hidden"
+            style={{
+              boxShadow:
+                "0 0 0 1px var(--accent-border), 0 40px 80px -24px rgba(124,58,237,0.35), 0 20px 40px -10px rgba(0,0,0,0.6)",
+            }}
+          >
+            <div
+              aria-hidden
+              className="absolute -top-20 -right-20 w-72 h-72 rounded-full pointer-events-none opacity-60"
+              style={{
+                background:
+                  "radial-gradient(closest-side, var(--accent-glow), transparent 70%)",
+                filter: "blur(40px)",
+              }}
+            />
+            <button
+              type="button"
+              onClick={onClose}
+              className="absolute top-4 right-4 z-10 w-8 h-8 rounded-md text-[color:var(--fg-muted)] hover:text-[color:var(--fg)] hover:bg-[color:var(--surface)] inline-flex items-center justify-center transition-colors"
+              aria-label="Close"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="relative p-7">
+              <p className="text-[11px] mono uppercase tracking-[0.22em] text-[color:var(--accent-hover)] mb-3">
+                premium content
+              </p>
+              <h3 className="text-[26px] font-bold tracking-tight leading-[1.1] mb-2">
+                You've reached the wall.
+              </h3>
+              <p className="text-[14px] text-[color:var(--fg-secondary)] leading-relaxed mb-6">
+                Support the writer to unlock the rest. Payment goes straight to
+                their wallet, anchored on Sui.
+              </p>
+
+              {!account && (
+                <div className="mb-5 p-3 rounded-md border border-[color:var(--warning)]/30 bg-[color:var(--warning)]/10">
+                  <p className="text-[12.5px] text-[color:var(--warning)]">
+                    Connect your wallet first.
+                  </p>
+                </div>
+              )}
+
+              <div
+                className={
+                  hasPay && hasSub
+                    ? "grid grid-cols-2 gap-3"
+                    : "grid grid-cols-1 gap-3"
+                }
+              >
+                {hasPay && (
+                  <PriceOption
+                    label="Pay once"
+                    price={formatSui(Number(fields.read_price))}
+                    sub="Yours forever"
+                    onClick={onPay}
+                    primary
+                    disabled={!account}
+                  />
+                )}
+                {hasSub && (
+                  <PriceOption
+                    label="Subscribe"
+                    price="1 SUI"
+                    sub="30 days, all articles"
+                    onClick={onSubscribe}
+                    primary={!hasPay}
+                    disabled={!account}
+                  />
+                )}
+              </div>
+
+              <div className="mt-5 space-y-2">
+                {hasPay && (
+                  <Button
+                    onClick={onPay}
+                    disabled={!account}
+                    className="w-full"
+                  >
+                    Pay {formatSui(Number(fields.read_price))} to read
+                  </Button>
+                )}
+                {hasSub && (
+                  <Button
+                    onClick={onSubscribe}
+                    disabled={!account}
+                    variant={hasPay ? "ghost" : "primary"}
+                    className="w-full"
+                  >
+                    Subscribe for 1 SUI / 30 days
+                  </Button>
+                )}
+              </div>
+
+              <p className="text-[11.5px] mono text-[color:var(--fg-subtle)] mt-6 text-center">
+                payments settle on sui · receipt on-chain
+              </p>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
+
+function PriceOption({
+  label,
+  price,
+  sub,
+  onClick,
+  primary,
+  disabled,
+}: {
+  label: string;
+  price: string;
+  sub: string;
+  onClick: () => void;
+  primary?: boolean;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={cn(
+        "group relative text-left rounded-xl border p-4 transition-all duration-200 overflow-hidden",
+        primary
+          ? "border-[color:var(--accent-border)] bg-[color:var(--accent-soft)] hover:bg-[color:var(--accent-soft)] hover:-translate-y-0.5"
+          : "border-[color:var(--border)] bg-[color:var(--surface)] hover:border-[color:var(--border-strong)] hover:-translate-y-0.5",
+        disabled && "opacity-50 cursor-not-allowed hover:translate-y-0"
+      )}
+    >
+      <p className="text-[11px] mono uppercase tracking-[0.18em] text-[color:var(--fg-muted)] mb-3">
+        {label}
+      </p>
+      <p
+        className={cn(
+          "text-[22px] font-bold tracking-tight leading-none mb-1",
+          primary
+            ? "text-[color:var(--accent-hover)]"
+            : "text-[color:var(--fg)]"
+        )}
+      >
+        {price}
+      </p>
+      <p className="text-[12.5px] text-[color:var(--fg-muted)]">{sub}</p>
+    </button>
+  );
+}
+
+/**
+ * Render only the first N "paragraph"-equivalent nodes from a TipTap JSON doc.
+ * Used to surface a free preview before the paywall fade.
+ */
+function renderPreview(content: string, maxBlocks: number): ReactNode {
+  try {
+    const json = JSON.parse(content) as Record<string, unknown>;
+    const docContent = Array.isArray(json.content)
+      ? (json.content as Record<string, unknown>[])
+      : [];
+    const trimmed = docContent.slice(0, maxBlocks);
+    return (
+      <>
+        {trimmed.map((node, i) => renderNode(node, i))}
+      </>
+    );
+  } catch {
+    // Plain text fallback: take first ~280 characters
+    const text = content.slice(0, 280);
+    return <p>{text}</p>;
+  }
+}
+
 function renderContent(content: string): ReactNode {
   try {
     const json = JSON.parse(content);
@@ -532,106 +946,4 @@ function renderNode(node: Record<string, unknown>, k: number): ReactNode {
     default:
       return null;
   }
-}
-
-function getDemoArticles(): Record<string, { fields: ContentFields; data: ArticleData }> {
-  const baseArticle: ArticleData = {
-    title: "Getting started with decentralized publishing",
-    description:
-      "How PENSUI empowers creators with permanent, censorship-resistant publishing on the Sui blockchain.",
-    content: JSON.stringify({
-      type: "doc",
-      content: [
-        {
-          type: "paragraph",
-          content: [
-            {
-              type: "text",
-              text: "Welcome to PENSUI — a decentralized media publishing protocol built on Sui. This article explores how permanent storage on Walrus changes the game for content creators.",
-            },
-          ],
-        },
-        {
-          type: "heading",
-          attrs: { level: 2 },
-          content: [{ type: "text", text: "Why decentralized publishing?" }],
-        },
-        {
-          type: "paragraph",
-          content: [
-            {
-              type: "text",
-              text: "Traditional platforms hold your content hostage. They can ban you, change algorithms, or simply shut down. With PENSUI, your words are stored as immutable blobs on Walrus — decentralized storage that guarantees availability.",
-            },
-          ],
-        },
-        {
-          type: "heading",
-          attrs: { level: 2 },
-          content: [{ type: "text", text: "How it works" }],
-        },
-        {
-          type: "paragraph",
-          content: [
-            {
-              type: "text",
-              text: "When you publish on PENSUI, three things happen: your content is uploaded to Walrus as a permanent blob, the blobId is recorded on the Sui blockchain via our smart contracts, and a Content NFT is created proving your authorship.",
-            },
-          ],
-        },
-        {
-          type: "paragraph",
-          content: [
-            {
-              type: "text",
-              text: "Readers can then collect your content by minting it as an NFT, tip you directly in SUI, or subscribe for premium access. Every transaction is transparent and on-chain.",
-            },
-          ],
-        },
-        {
-          type: "blockquote",
-          content: [
-            {
-              type: "paragraph",
-              content: [
-                {
-                  type: "text",
-                  text: "Every other publishing platform is a landlord. PENSUI gives creators the deed.",
-                },
-              ],
-            },
-          ],
-        },
-      ],
-    }),
-    author: "0x1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b",
-    createdAt: Date.now() - 3600000,
-  };
-
-  const baseFields: ContentFields = {
-    creator: "0x1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b",
-    blob_id: "demo-blob",
-    title: baseArticle.title,
-    description: baseArticle.description,
-    content_type: 0,
-    mint_price: "1000000000",
-    read_price: "0",
-    subscription_required: false,
-    total_mints: "12",
-    total_tips: "5",
-    total_earnings: "17000000000",
-    created_at: String(Date.now() - 3600000),
-  };
-
-  return {
-    "demo-1": { fields: baseFields, data: baseArticle },
-    "demo-2": {
-      fields: { ...baseFields, mint_price: "0", read_price: "500000000", total_mints: "0", title: "The future of content ownership in Web3", description: "Why storing content on Walrus changes everything for digital creators." },
-      data: { ...baseArticle, title: "The future of content ownership in Web3" },
-    },
-    "demo-3": {
-      fields: { ...baseFields, mint_price: "2000000000", read_price: "0", total_mints: "8", title: "Sui Move: building the publishing protocol", description: "A technical deep dive into PENSUI smart contracts." },
-      data: { ...baseArticle, title: "Sui Move: building the publishing protocol" },
-    },
-  };
 }

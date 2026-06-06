@@ -101,7 +101,7 @@ module pensui::content {
             read_price,
         });
 
-        transfer::transfer(content, sender);
+        transfer::share_object(content);
     }
 
     public fun mint_collect(

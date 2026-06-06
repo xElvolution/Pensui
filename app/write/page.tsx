@@ -1,13 +1,23 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { useCurrentAccount, useSignAndExecuteTransaction } from "@mysten/dapp-kit";
-import { TipTapEditor } from "@/components/editor/tiptap-editor";
+import {
+  useCurrentAccount,
+  useSignAndExecuteTransaction,
+  useSuiClient,
+} from "@mysten/dapp-kit";
+import {
+  TipTapEditor,
+  type TipTapEditorHandle,
+} from "@/components/editor/tiptap-editor";
 import { buildPublishTx } from "@/lib/contracts";
 import { CONTENT_TYPES } from "@/lib/constants";
+import { uploadBlobToWalrus, type WalrusUploadStep } from "@/lib/walrus-upload";
+import type { SuiJsonRpcClient } from "@mysten/sui/jsonRpc";
+import { ConnectHero } from "@/components/wallet/connect-hero";
+import { AiSidebar } from "@/components/ai/ai-sidebar";
 import { Button } from "@/components/ui/button";
-import { EmptyState } from "@/components/ui/empty-state";
 import {
   Send,
   Sparkles,
@@ -15,12 +25,19 @@ import {
   Lock,
   CheckCircle2,
   AlertCircle,
-  Wallet,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 
-type PublishStatus = "idle" | "uploading" | "signing" | "success" | "error";
+type PublishStatus =
+  | "idle"
+  | "encoding"
+  | "registering"
+  | "uploading"
+  | "certifying"
+  | "signing"
+  | "success"
+  | "error";
 
 interface ToggleRowProps {
   icon: React.ReactNode;
@@ -51,15 +68,15 @@ function ToggleRow({ icon, title, subtitle, enabled, onToggle, priceInput }: Tog
           type="button"
           onClick={onToggle}
           className={cn(
-            "relative w-10 h-6 rounded-full transition-colors duration-200",
+            "relative w-11 h-6 rounded-full transition-colors duration-200 inline-flex items-center p-0.5 shrink-0",
             enabled ? "bg-[color:var(--accent)]" : "bg-[color:var(--border-strong)]"
           )}
           aria-pressed={enabled}
         >
           <span
             className={cn(
-              "absolute top-0.5 w-5 h-5 rounded-full bg-white transition-transform duration-200",
-              enabled ? "translate-x-[18px]" : "translate-x-0.5"
+              "block w-5 h-5 rounded-full bg-white shadow-sm transition-transform duration-200 will-change-transform",
+              enabled ? "translate-x-[18px]" : "translate-x-0"
             )}
           />
         </button>
@@ -70,6 +87,7 @@ function ToggleRow({ icon, title, subtitle, enabled, onToggle, priceInput }: Tog
 
 export default function WritePage() {
   const account = useCurrentAccount();
+  const suiClient = useSuiClient() as unknown as SuiJsonRpcClient;
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
   const router = useRouter();
 
@@ -86,6 +104,11 @@ export default function WritePage() {
   const [status, setStatus] = useState<PublishStatus>("idle");
   const [errorMsg, setErrorMsg] = useState("");
 
+  // For the AI sidebar
+  const editorRef = useRef<TipTapEditorHandle | null>(null);
+  const [selection, setSelection] = useState("");
+  const [plainText, setPlainText] = useState("");
+
   const canPublish =
     account && title.trim() && content && (status === "idle" || status === "error");
 
@@ -93,29 +116,33 @@ export default function WritePage() {
     if (!canPublish) return;
 
     try {
-      setStatus("uploading");
       setErrorMsg("");
 
-      const articleData = {
+      const articleJson = JSON.stringify({
         title,
         description,
         content,
+        tags: [],
         author: account!.address,
         createdAt: Date.now(),
-      };
-
-      const res = await fetch("/api/publish", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(articleData),
+        version: 1,
       });
 
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || "Failed to upload to Walrus");
-      }
+      const articleBytes = new TextEncoder().encode(articleJson);
 
-      const { blobId } = await res.json();
+      const { blobId } = await uploadBlobToWalrus({
+        suiClient,
+        signAndExecute: signAndExecute as Parameters<typeof uploadBlobToWalrus>[0]["signAndExecute"],
+        bytes: articleBytes,
+        owner: account!.address,
+        epochs: 5,
+        onStep: (step: WalrusUploadStep) => {
+          if (step === "encoding") setStatus("encoding");
+          else if (step === "registering") setStatus("registering");
+          else if (step === "uploading") setStatus("uploading");
+          else if (step === "certifying") setStatus("certifying");
+        },
+      });
 
       setStatus("signing");
 
@@ -140,19 +167,12 @@ export default function WritePage() {
   }
 
   if (!account) {
-    return (
-      <div className="pt-32 pb-24 container-page">
-        <EmptyState
-          icon={<Wallet className="w-7 h-7" strokeWidth={1.5} />}
-          title="Connect your wallet"
-          description="Sign in with any Sui wallet to start publishing on PENSUI."
-        />
-      </div>
-    );
+    return <ConnectHero />;
   }
 
   return (
-    <div className="pt-24 pb-24">
+    <>
+    <div className="pt-24 pb-24 lg:pr-[380px]">
       <div className="container-page max-w-3xl">
         <motion.div
           initial={{ opacity: 0, y: 8 }}
@@ -179,7 +199,13 @@ export default function WritePage() {
             className="w-full bg-transparent border-0 outline-none text-[17px] text-[color:var(--fg-secondary)] placeholder:text-[color:var(--fg-subtle)] mb-10"
           />
 
-          <TipTapEditor content={content} onChange={setContent} />
+          <TipTapEditor
+            ref={editorRef}
+            content={content}
+            onChange={setContent}
+            onSelectionChange={setSelection}
+            onPlainTextChange={setPlainText}
+          />
 
           <div className="card mt-8">
             <div className="flex items-center justify-between mb-2">
@@ -281,15 +307,45 @@ export default function WritePage() {
                   className="flex items-center justify-between gap-4"
                 >
                   <p className="text-[12.5px] text-[color:var(--fg-muted)]">
-                    {status === "uploading" && "Uploading to Walrus…"}
-                    {status === "signing" && "Confirm in your wallet…"}
-                    {status === "idle" &&
-                      "Your article will be permanently stored on Walrus."}
+                    {status === "encoding" && "Encoding blob (Reed-Solomon)…"}
+                    {status === "registering" && "Confirm Walrus register in wallet…"}
+                    {status === "uploading" && "Uploading slivers to Walrus nodes…"}
+                    {status === "certifying" && "Confirm Walrus certify in wallet…"}
+                    {status === "signing" && "Confirm publish in wallet…"}
+                    {status === "idle" && (
+                      <>
+                        Wallet-signed upload to Walrus. Need testnet tokens?{" "}
+                        <a
+                          href="https://faucet.sui.io/"
+                          target="_blank"
+                          rel="noreferrer"
+                          className="underline hover:text-[color:var(--fg)]"
+                        >
+                          SUI faucet
+                        </a>
+                        {" · "}
+                        <a
+                          href="https://stake-wal.wal.app/"
+                          target="_blank"
+                          rel="noreferrer"
+                          className="underline hover:text-[color:var(--fg)]"
+                        >
+                          WAL faucet
+                        </a>
+                        .
+                      </>
+                    )}
                   </p>
                   <Button
                     onClick={handlePublish}
                     disabled={!canPublish}
-                    loading={status === "uploading" || status === "signing"}
+                    loading={
+                      status === "encoding" ||
+                      status === "registering" ||
+                      status === "uploading" ||
+                      status === "certifying" ||
+                      status === "signing"
+                    }
                     leftIcon={
                       status === "idle" ? <Send className="w-4 h-4" /> : undefined
                     }
@@ -303,6 +359,13 @@ export default function WritePage() {
         </motion.div>
       </div>
     </div>
+    <AiSidebar
+      selection={selection}
+      plainText={plainText}
+      onApplyEdit={(orig, sug) => editorRef.current?.applyEdit(orig, sug)}
+      onInsertToArticle={(text) => editorRef.current?.insertContent(text)}
+    />
+    </>
   );
 }
 

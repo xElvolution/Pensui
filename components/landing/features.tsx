@@ -27,7 +27,7 @@ const features = [
   {
     icon: Lock,
     title: "Programmable access",
-    body: "Gate content behind paywalls, subscriptions, or NFT ownership — enforced by code.",
+    body: "Gate content behind paywalls, subscriptions, or NFT ownership, enforced by code.",
   },
   {
     icon: Globe,

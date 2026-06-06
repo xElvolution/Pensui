@@ -22,11 +22,18 @@ import {
   Redo,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useRef, useState, useImperativeHandle, forwardRef } from "react";
+
+export interface TipTapEditorHandle {
+  applyEdit: (original: string, suggestion: string) => boolean;
+  insertContent: (text: string) => void;
+}
 
 interface Props {
   content: string;
   onChange: (content: string) => void;
+  onSelectionChange?: (selectedText: string) => void;
+  onPlainTextChange?: (plainText: string) => void;
 }
 
 function TbBtn({
@@ -57,7 +64,10 @@ function TbBtn({
   );
 }
 
-export function TipTapEditor({ content, onChange }: Props) {
+export const TipTapEditor = forwardRef<TipTapEditorHandle, Props>(function TipTapEditor(
+  { content, onChange, onSelectionChange, onPlainTextChange },
+  ref
+) {
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -78,8 +88,67 @@ export function TipTapEditor({ content, onChange }: Props) {
     content: content ? safeParse(content) : undefined,
     onUpdate: ({ editor }) => {
       onChange(JSON.stringify(editor.getJSON()));
+      onPlainTextChange?.(editor.getText());
+    },
+    onSelectionUpdate: ({ editor }) => {
+      if (!onSelectionChange) return;
+      const { from, to } = editor.state.selection;
+      const text = from === to ? "" : editor.state.doc.textBetween(from, to, "\n");
+      onSelectionChange(text);
     },
   });
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      /**
+       * Find the first text node containing `original` and replace that
+       * occurrence with `suggestion`. Returns true if a replacement happened.
+       * Limitation: `original` must lie within a single text node (i.e. no
+       * styling boundaries inside the matched span).
+       */
+      applyEdit(original: string, suggestion: string) {
+        if (!editor || !original) return false;
+        const tr = editor.state.tr;
+        let replaced = false;
+        editor.state.doc.descendants((node, pos) => {
+          if (replaced) return false;
+          if (node.isText && node.text) {
+            const idx = node.text.indexOf(original);
+            if (idx >= 0) {
+              const from = pos + idx;
+              const to = from + original.length;
+              tr.insertText(suggestion, from, to);
+              replaced = true;
+              return false;
+            }
+          }
+          return true;
+        });
+        if (replaced) {
+          editor.view.dispatch(tr);
+        }
+        return replaced;
+      },
+      /**
+       * Append plain text to the end of the doc, splitting paragraphs on blank
+       * lines so AI prose lands as multiple <p> blocks instead of one wall.
+       */
+      insertContent(text: string) {
+        if (!editor || !text) return;
+        const end = editor.state.doc.content.size;
+        editor.chain().focus().setTextSelection(end).run();
+        const paragraphs = text.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
+        for (const p of paragraphs) {
+          editor.chain().focus().insertContent({
+            type: "paragraph",
+            content: [{ type: "text", text: p }],
+          }).run();
+        }
+      },
+    }),
+    [editor]
+  );
 
   const onUpload = useCallback(() => fileInputRef.current?.click(), []);
 
@@ -222,7 +291,7 @@ export function TipTapEditor({ content, onChange }: Props) {
       />
     </div>
   );
-}
+});
 
 function safeParse(s: string) {
   try {

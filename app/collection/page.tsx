@@ -9,9 +9,9 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Mono } from "@/components/ui/mono";
+import { ConnectHero } from "@/components/wallet/connect-hero";
 import {
   Library,
-  Wallet,
   Sparkles,
   Hash,
 } from "lucide-react";
@@ -48,10 +48,8 @@ export default function CollectionPage() {
         "0x0000000000000000000000000000000000000000000000000000000000000000";
 
     if (!deployed) {
-      setTimeout(() => {
-        setNfts(demoNFTs());
-        setLoading(false);
-      }, 400);
+      setNfts([]);
+      setLoading(false);
       return;
     }
 
@@ -79,24 +77,16 @@ export default function CollectionPage() {
       }
 
       collected.sort((a, b) => b.collectedAt - a.collectedAt);
-      setNfts(collected.length > 0 ? collected : demoNFTs());
+      setNfts(collected);
     } catch {
-      setNfts(demoNFTs());
+      setNfts([]);
     } finally {
       setLoading(false);
     }
   }
 
   if (!account) {
-    return (
-      <div className="pt-32 pb-24 container-page">
-        <EmptyState
-          icon={<Wallet className="w-7 h-7" strokeWidth={1.5} />}
-          title="Connect your wallet"
-          description="View your collected content NFTs — permanent proof of support."
-        />
-      </div>
-    );
+    return <ConnectHero />;
   }
 
   return (
@@ -173,27 +163,4 @@ export default function CollectionPage() {
       </div>
     </div>
   );
-}
-
-function demoNFTs(): CollectedNFT[] {
-  return [
-    {
-      id: "demo-nft-1",
-      contentId: "demo-1",
-      title: "Getting started with decentralized publishing",
-      creator: "0x1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b",
-      blobId: "demo-blob-1",
-      mintNumber: 3,
-      collectedAt: Date.now() - 3600000,
-    },
-    {
-      id: "demo-nft-2",
-      contentId: "demo-3",
-      title: "Sui Move: building the publishing protocol",
-      creator: "0x3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d",
-      blobId: "demo-blob-3",
-      mintNumber: 7,
-      collectedAt: Date.now() - 86400000,
-    },
-  ];
 }

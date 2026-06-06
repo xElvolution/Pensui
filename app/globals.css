@@ -334,7 +334,10 @@ body {
 .input {
   width: 100%;
   height: 44px;
-  padding: 0 16px;
+  padding-top: 0;
+  padding-right: 16px;
+  padding-bottom: 0;
+  padding-left: 16px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r-md);
@@ -556,4 +559,36 @@ body {
 
 .connect-button-wrap button:hover {
   background: var(--accent-hover) !important;
+}
+
+/* ---------- Oversized variant used in the connect hero page ---------- */
+.connect-hero-button [data-state="open"] > button,
+.connect-hero-button button {
+  background: var(--accent) !important;
+  color: #fff !important;
+  height: 64px !important;
+  padding: 0 36px !important;
+  border-radius: 999px !important;
+  font-weight: 600 !important;
+  font-size: 1.0625rem !important;
+  letter-spacing: -0.01em !important;
+  border: 1px solid transparent !important;
+  box-shadow:
+    0 0 0 1px var(--accent-border),
+    0 24px 60px -16px rgba(124, 58, 237, 0.55),
+    0 8px 24px -8px rgba(124, 58, 237, 0.35) !important;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background-color 0.18s ease !important;
+}
+
+.connect-hero-button button:hover {
+  background: var(--accent-hover) !important;
+  transform: translateY(-1px);
+  box-shadow:
+    0 0 0 1px var(--accent-border),
+    0 28px 68px -16px rgba(124, 58, 237, 0.65),
+    0 10px 28px -8px rgba(124, 58, 237, 0.4) !important;
+}
+
+.connect-hero-button button:active {
+  transform: translateY(0);
 }

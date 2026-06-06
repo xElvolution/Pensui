@@ -50,7 +50,7 @@ export function HowItWorks() {
           </p>
           <h2 className="text-h2 mb-4">Publish in three steps.</h2>
           <p className="text-body">
-            From draft to monetized, fully on-chain — without giving up ownership of your work.
+            From draft to monetized, fully on-chain, without giving up ownership of your work.
           </p>
         </motion.div>
 
